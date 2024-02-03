@@ -5,13 +5,15 @@ from zipfile import ZipFile
 import requests
 import json
 import sys
-from elftools.elf.elffile import ELFFile
-from elftools.elf.relocation import RelocationSection
-from elftools.elf.sections import SymbolTableSection
 import plistlib
 from io import BytesIO
 import base64
 import datetime
+from ctypes import *
+
+from elftools.elf.elffile import ELFFile
+from elftools.elf.relocation import RelocationSection
+from elftools.elf.sections import SymbolTableSection
 
 from unicorn import *
 from unicorn.arm64_const import *
@@ -30,17 +32,25 @@ importSize = 0x1000
 
 #FIXME: Define pageSize
 
+def debugPrint(message):
+    if False:
+        print(message)
+
+def debugTrace(message):
+    if False:
+        print(message)
+
 def hook_mem_invalid(uc, access, address, size, value, user_data):
     vm = user_data
     assert(vm.uc == uc)
 
     if access == UC_MEM_WRITE_UNMAPPED:
-        print(">>> Missing memory is being WRITE at 0x%x, data size = %u, data value = 0x%x" \
+        debugPrint(">>> Missing memory is being WRITE at 0x%x, data size = %u, data value = 0x%x" \
                 %(address, size, value))
         # return True to indicate we want to continue emulation
         #return False
     elif access == UC_MEM_FETCH_UNMAPPED:
-        print(">>> Missing memory is being FETCH at 0x%x, data size = %u, data value = 0x%x" \
+        debugPrint(">>> Missing memory is being FETCH at 0x%x, data size = %u, data value = 0x%x" \
                 %(address, size, value))
     else:
         # return False to indicate we want to stop emulation
@@ -53,20 +63,20 @@ def hook_code(uc, address, size, user_data):
     vm = user_data
     assert(vm.uc == uc)
 
-    print(">>> Tracing at 0x%X:" % (address), end="")
+    debugPrint(">>> Tracing at 0x%X:" % (address), end="")
     # read this instruction code from memory
     tmp = uc.mem_read(address, size)
     for i in tmp:
-        print(" %02X" %i, end="")
+        debugPrint(" %02X" %i, end="")
     for i in [3, 8, 9, 10, 11, 20]:
         value = uc.reg_read(UC_ARM64_REG_X0 + i)
-        print("; X%d: 0x%08X" % (i, value), end="")
-    print("; W13=0x%X" % uc.reg_read(UC_ARM64_REG_W13), end="")
-    print("; W14=0x%X" % uc.reg_read(UC_ARM64_REG_W14), end="")
-    print("; W15=0x%X" % uc.reg_read(UC_ARM64_REG_W15), end="")
-    print("; FP/X29=0x%X" % uc.reg_read(UC_ARM64_REG_FP), end="")
+        debugPrint("; X%d: 0x%08X" % (i, value), end="")
+    debugPrint("; W13=0x%X" % uc.reg_read(UC_ARM64_REG_W13), end="")
+    debugPrint("; W14=0x%X" % uc.reg_read(UC_ARM64_REG_W14), end="")
+    debugPrint("; W15=0x%X" % uc.reg_read(UC_ARM64_REG_W15), end="")
+    debugPrint("; FP/X29=0x%X" % uc.reg_read(UC_ARM64_REG_FP), end="")
     #print("; *347c40=0x%08X" % int.from_bytes(uc.mem_read(0x347c40, 4), 'little'), end="")
-    print("")
+    debugPrint("")
 
 def hook_block(uc, address, size, user_data):
     vm = user_data
@@ -99,7 +109,7 @@ def hook_stub(uc, address, size, user_data):
         stubbedFunctions[symbolName](vm)
         #assert(False)
     else:
-        print(symbolName)
+        debugPrint(symbolName)
         assert(False)
 
     #time.sleep(0.1)
@@ -188,7 +198,7 @@ def allocData(vm, data):
     length, paddingSize = roundUp(len(data), 0x1000)
     address = vm.tempAllocator.alloc(length)
     
-    print("Allocating at 0x%X; bytes 0x%X/0x%X" % (address, len(data), length))
+    debugPrint("Allocating at 0x%X; bytes 0x%X/0x%X" % (address, len(data), length))
     uc.mem_map(address, length)
     uc.mem_write(address, data + b'\xCC' * paddingSize)
 
@@ -203,8 +213,8 @@ def invoke_cdecl(vm, address, args):
     for i, value in enumerate(args):
         assert(i <= 28)
         uc.reg_write(UC_ARM64_REG_X0 + i, value)
-        print("X%d: 0x%08X" % (i, value))
-    print("Calling 0x%X" % address)
+        debugPrint("X%d: 0x%08X" % (i, value))
+    debugPrint("Calling 0x%X" % address)
     uc.reg_write(UC_ARM64_REG_SP, stackAddress + stackSize)
     uc.reg_write(UC_ARM64_REG_LR, lr)
     #uc.reg_write(UC_ARM64_REG_FP, stackAddress + stackSize)
@@ -293,19 +303,19 @@ def sTo_u64(value):
 
 class ADI():
     def __init__(self, libraryPath):
-        print("Constructing ADI for '%s'" % libraryPath)
+        debugPrint("Constructing ADI for '%s'" % libraryPath)
 
         self.__vm = createVm()
 
         storeservicecoreLibrary = loadLibrary(self.__vm, "libstoreservicescore.so")
 
-        print("Loading Android-specific symbols...")
+        debugPrint("Loading Android-specific symbols...")
 
         self.__pADILoadLibraryWithPath = resolveSymbolByName(storeservicecoreLibrary, "kq56gsgHG6")
         self.__pADISetAndroidID = resolveSymbolByName(storeservicecoreLibrary, "Sph98paBcz")
         self.__pADISetProvisioningPath = resolveSymbolByName(storeservicecoreLibrary, "nf92ngaK92")
 
-        print("Loading ADI symbols...")
+        debugPrint("Loading ADI symbols...")
 
         self.__pADIProvisioningErase = resolveSymbolByName(storeservicecoreLibrary, "p435tmhbla")
         self.__pADISynchronize = resolveSymbolByName(storeservicecoreLibrary, "tn46gtiuhw")
@@ -335,7 +345,7 @@ class ADI():
     @identifier.setter
     def identifier(self, value):
         self._identifier = value
-        print("Setting identifier", value)
+        debugPrint("Setting identifier %s" % value)
         identifier = value.encode('utf-8')
         pIdentifier = allocData(self.__vm, identifier)
         invoke_cdecl(self.__vm, self.__pADISetAndroidID, [pIdentifier, len(identifier)])
@@ -363,23 +373,23 @@ class ADI():
             len(trustKey)
         ])
 
-        print("0x%X" % session)
-        print(persistentTokenMetadata.hex(), len(persistentTokenMetadata))
-        print(trustKey.hex(), len(trustKey))
+        debugPrint("0x%X" % session)
+        debugPrint(persistentTokenMetadata.hex(), len(persistentTokenMetadata))
+        debugPrint(trustKey.hex(), len(trustKey))
 
-        print("%s: %X=%d" % ("pADIProvisioningEnd", ret, uTo_s32(ret)))
+        debugPrint("%s: %X=%d" % ("pADIProvisioningEnd", ret, uTo_s32(ret)))
         assert(ret == 0)
 
     def start_provisioning(self, dsId, serverProvisioningIntermediateMetadata):
-        print("ADI.start_provisioning")
+        debugPrint("ADI.start_provisioning")
         #FIXME: !!!
 
         pCpim = allocTemporary(self.__vm, 8) # ubyte*
         pCpimLength = allocTemporary(self.__vm, 4) # uint
         pSession = allocTemporary(self.__vm, 4) # uint
         pServerProvisioningIntermediateMetadata = allocData(self.__vm, serverProvisioningIntermediateMetadata)
-        print("0x%X" % dsId)
-        print(serverProvisioningIntermediateMetadata.hex())
+        debugPrint("0x%X" % dsId)
+        debugPrint(serverProvisioningIntermediateMetadata.hex())
 
         ret = invoke_cdecl(self.__vm, self.__pADIProvisioningStart, [
             dsId,
@@ -389,22 +399,22 @@ class ADI():
             pCpimLength,
             pSession
         ])
-        print("%s: %X=%d" % ("pADIProvisioningStart", ret, uTo_s32(ret)))
+        debugPrint("%s: %X=%d" % ("pADIProvisioningStart", ret, uTo_s32(ret)))
         assert(ret == 0)
 
 
         # Readback output
         cpim = read_u64(self.__vm, pCpim)
-        print("Wrote data to 0x%X" % cpim)
+        debugPrint("Wrote data to 0x%X" % cpim)
         cpimLength = read_u32(self.__vm, pCpimLength)
         cpimBytes = read_data(self.__vm, cpim, cpimLength)
         session = read_u32(self.__vm, pSession)
 
-        print(cpimLength, cpimBytes.hex(), session)
+        debugPrint(cpimLength, cpimBytes.hex(), session)
         #assert(False)
         return ClientProvisioningIntermediateMetadata(self, cpimBytes, session)
     def is_machine_provisioned(self, dsId):
-        print("ADI.is_machine_provisioned")
+        debugPrint("ADI.is_machine_provisioned")
 
 
         errorCode = uTo_s32(invoke_cdecl(self.__vm, self.__pADIGetLoginCode, [dsId]))
@@ -414,13 +424,13 @@ class ADI():
         elif (errorCode == -45061):
             return False
         
-        print("Unknown errorCode in is_machine_provisioned: %d=0x%X" % (errorCode, errorCode))
+        debugPrint("Unknown errorCode in is_machine_provisioned: %d=0x%X" % (errorCode, errorCode))
         assert(False)
 
     def dispose(self):
         assert(False)
     def request_otp(self, dsId):
-        print("ADI.request_otp")
+        debugPrint("ADI.request_otp")
         #FIXME: !!!
 
         pOtp = allocTemporary(self.__vm, 8)
@@ -440,7 +450,7 @@ class ADI():
             pOtp,
             pOtpLength
         ])
-        print("%s: %X=%d" % ("pADIOTPRequest", ret, uTo_s32(ret)))
+        debugPrint("%s: %X=%d" % ("pADIOTPRequest", ret, uTo_s32(ret)))
         assert(ret == 0)
         
         otp = read_u64(self.__vm, pOtp)
@@ -525,7 +535,7 @@ class ProvisioningSession():
         return datetime.datetime.now().replace(microsecond=0).isoformat()
 
     def provision(self, dsId):
-        print("ProvisioningSession.provision")
+        debugPrint("ProvisioningSession.provision")
         #FIXME: !!!
 
 
@@ -550,14 +560,14 @@ class ProvisioningSession():
         spimPlist = plistlib.loads(startProvisioningPlist)
         spimResponse = spimPlist['Response']
         spimStr = spimResponse["spim"]
-        print(spimStr)
+        debugPrint(spimStr)
 
         spim = base64.b64decode(spimStr)
 
         cpim = self.adi.start_provisioning(dsId, spim)
         #FIXME: scope (failure) try { adi.destroyProvisioning(cpim.session); } catch(Throwable) {}
 
-        print(cpim.client_provisioning_intermediate_metadata.hex())
+        debugPrint(cpim.client_provisioning_intermediate_metadata.hex())
 
         extraHeaders = {
             "X-Apple-I-Client-Time": self.__time()
@@ -598,7 +608,7 @@ localUserUUIDJson = "localUUID"
 class Device():
     def __init__(self, path):
     
-        print("Constructing Device for '%s'" % path)
+        debugPrint("Constructing Device for '%s'" % path)
 
         self.__path = path
 
@@ -728,7 +738,7 @@ mallocAllocator = Allocator(mallocAddress, mallocSize)
 def hook_malloc(vm):
     uc = vm.uc
     x0 = uc.reg_read(UC_ARM64_REG_X0)
-    print("malloc(0x%X)" % x0)
+    debugTrace("malloc(0x%X)" % x0)
     x0 = mallocAllocator.alloc(x0)
     uc.reg_write(UC_ARM64_REG_X0, x0)
 
@@ -767,7 +777,7 @@ def hook_mkdir(vm):
     path = read_cstr(vm, x0).decode('utf-8')
     mode = x1
 
-    print("mkdir('%s', %s)" % (path, oct(mode)))
+    debugTrace("mkdir('%s', %s)" % (path, oct(mode)))
 
     assert(path in [
         "./anisette"
@@ -797,11 +807,11 @@ def hook_chmod(vm):
     path = read_cstr(vm, x0).decode('utf-8')
     mode = x1
 
-    print("chmod('%s', %s)" % (path, oct(mode)))
+    debugTrace("chmod('%s', %s)" % (path, oct(mode)))
 
     uc.reg_write(UC_ARM64_REG_X0, 0)
 
-from ctypes import *
+
 
 # Based on https://github.com/Dadoum/Provision/blob/main/lib/std_edit/linux_stat.d (aarch64)
 #FIXME: These must be changed to fixed size types
@@ -873,7 +883,7 @@ comment = """
 
 tmp = c_stat()
 tmpLen = len(bytes(tmp))
-print(tmpLen)
+#print(tmpLen)
 assert(tmpLen == 128)
 
 errnoAddress = None
@@ -905,10 +915,10 @@ def handle_stat(vm, path, buf):
     statBytes = bytes(stat)
     #print(statBytes.hex(), len(statBytes))
 
-    print(statResult.st_size, statResult.st_blksize, statResult.st_blocks)
-    print(stat.st_size, stat.st_blksize, stat.st_blocks)
+    debugPrint("%s %s %s" % (statResult.st_size, statResult.st_blksize, statResult.st_blocks))
+    debugPrint("%s %s %s" % (stat.st_size, stat.st_blksize, stat.st_blocks))
 
-    print("0x%X = %d" % (statResult.st_mode, statResult.st_mode))
+    debugPrint("0x%X = %d" % (statResult.st_mode, statResult.st_mode))
     statBytes = b"".join([
         bytes.fromhex("00000000" + "00000000" + # st_dev
                       "00000000" + "00000000") + # st_ino
@@ -935,7 +945,7 @@ def handle_stat(vm, path, buf):
                     )
     ])
     #00000000000000000002000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-    print(len(statBytes))
+    debugPrint(len(statBytes))
     assert(len(statBytes) in [104, 128])
 
 
@@ -953,7 +963,7 @@ def hook_lstat(vm):
     path = read_cstr(vm, pPath).decode('utf-8')
     buf = x1
 
-    print("lstat(0x%X:'%s', [...])" % (pPath, path))
+    debugTrace("lstat(0x%X:'%s', [...])" % (pPath, path))
 
     return handle_stat(vm, path, buf)
 
@@ -991,7 +1001,7 @@ def hook_open(vm):
     oflag = x1
     mode = x2
 
-    print("open('%s', %s, %s)" % (path, oct(oflag), oct(mode)))
+    debugTrace("open('%s', %s, %s)" % (path, oct(oflag), oct(mode)))
     #time.sleep(2.0)
     #assert(False)
 
@@ -1025,7 +1035,7 @@ def hook_ftruncate(vm):
     fildes = x0
     length = x1
 
-    print("ftruncate(%d, %d)" % (fildes, length))
+    debugTrace("ftruncate(%d, %d)" % (fildes, length))
 
     fileIndex = fildes
     fileHandle = fileHandles[fileIndex]
@@ -1044,7 +1054,7 @@ def hook_read(vm):
     buf = x1
     nbyte = x2
     
-    print("read(%d, 0x%X, %d)" % (fildes, buf, nbyte))
+    debugTrace("read(%d, 0x%X, %d)" % (fildes, buf, nbyte))
     #assert(False)
 
     fileIndex = fildes
@@ -1066,7 +1076,7 @@ def hook_write(vm):
     buf = x1
     nbyte = x2
     
-    print("write(%d, 0x%X, %d)" % (fildes, buf, nbyte))
+    debugTrace("write(%d, 0x%X, %d)" % (fildes, buf, nbyte))
 
     fileIndex = fildes
     fileHandle = fileHandles[fileIndex]
@@ -1094,7 +1104,7 @@ def hook_dlopenWrapper(vm):
     path = read_cstr(vm, x0).decode('utf-8')
     libraryName = path.rpartition('/')[2]
 
-    print("dlopen for '%s' (= '%s')" % (path, libraryName))
+    debugTrace("dlopen('%s' (%s))" % (path, libraryName))
 
     assert(libraryName in [
         "libCoreADI.so"
@@ -1115,10 +1125,10 @@ def hook_dlsymWrapper(vm):
     libraryIndex = handle - 1
     library = vm.loadedLibraries[libraryIndex]
 
-    print("dlsym for 0x%X (%s), '%s'" % (handle, library.name, symbol))
+    debugTrace("dlsym(%X (%s), '%s')" % (handle, library.name, symbol))
 
     symbolAddress = resolveSymbolByName(library, symbol)
-    print("Found at 0x%X" % symbolAddress)
+    debugPrint("Found at 0x%X" % symbolAddress)
 
     vm.uc.reg_write(UC_ARM64_REG_X0, symbolAddress)
 
@@ -1127,8 +1137,10 @@ hook_dlcloseWrapper = hook_emptyStub
 def hook_gettimeofday(vm):
     timestamp = time.time()
 
+    cacheTime = False
     cachePath = "cache/time.bin"
-    if False:
+
+    if cacheTime:
         tBytes = open(cachePath, "rb").read()
         print("Loaded time from cache!")
         t = c_timeval.from_buffer_copy(tBytes)
@@ -1139,7 +1151,9 @@ def hook_gettimeofday(vm):
         tv_usec = math.floor((timestamp % 1.0) * 1000 * 1000)
     )
     tBytes = bytes(t)
-    open(cachePath, "wb").write(tBytes)
+
+    if cacheTime:
+        open(cachePath, "wb").write(tBytes)
 
     x0 = vm.uc.reg_read(UC_ARM64_REG_X0)
     x1 = vm.uc.reg_read(UC_ARM64_REG_X1)
@@ -1147,7 +1161,7 @@ def hook_gettimeofday(vm):
     tp = x0
     tzp = x1
 
-    print("gettimeofday(0x%X, 0x%X)" % (tp, tzp))
+    debugTrace("gettimeofday(0x%X, 0x%X)" % (tp, tzp))
 
     # We don't need timezone support
     assert(tzp == 0)
@@ -1159,7 +1173,7 @@ def hook_gettimeofday(vm):
     """
 
     # Write the time
-    print(t.__dict__, tBytes.hex(), len(tBytes))
+    debugPrint("%s %s %s" % (t.__dict__, tBytes.hex(), len(tBytes)))
     write_data(vm, tp, tBytes)
     
     # Return success
@@ -1174,7 +1188,7 @@ def setErrno(vm, value):
 def hook___errno_location(vm):
     global errnoAddress
     if errnoAddress == None:
-        print("Checking errno before first error (!)")
+        debugPrint("Checking errno before first error (!)")
         setErrno(vm, 0)
     vm.uc.reg_write(UC_ARM64_REG_X0, errnoAddress)
 
@@ -1182,7 +1196,7 @@ def hook___system_property_get_impl(vm):
     x0 = vm.uc.reg_read(UC_ARM64_REG_X0)
     x1 = vm.uc.reg_read(UC_ARM64_REG_X1)
     name = read_cstr(vm, x0).decode('utf-8')
-    print("__system_property_get(%s, [...])" % name)
+    debugTrace("__system_property_get(%s, [...])" % name)
     value = b"no s/n number"
     write_data(vm, x1, value)
     vm.uc.reg_write(UC_ARM64_REG_X0, len(value))
@@ -1284,9 +1298,9 @@ def loadLibrary(vm, libraryName):
 
     # Do not load the same library multiple times
     for library in vm.loadedLibraries:
-        print("Comparing '%s' to loaded library '%s'" % (libraryName, library.name))
+        debugPrint("Comparing '%s' to loaded library '%s'" % (libraryName, library.name))
         if library.name == libraryName:
-            print("Library already loaded")
+            debugPrint("Library already loaded")
             return library
 
     uc = vm.uc
@@ -1340,14 +1354,14 @@ def loadLibrary(vm, libraryName):
         paddingBeforeSize = address - addressStart
         paddingAfterSize = size - dataSize
 
-        print("Mapping at 0x%X-0x%X (0x%X-0x%X); bytes 0x%X" % (addressStart, addressEnd, address, address + size - 1, size))
+        debugPrint("Mapping at 0x%X-0x%X (0x%X-0x%X); bytes 0x%X" % (addressStart, addressEnd, address, address + size - 1, size))
 
         if segment['p_type'] == 'PT_LOAD':
             data = b'\x00' * paddingBeforeSize + elfData[dataOffset:dataOffset+dataSize] + b'\x00' * paddingAfterSize
             uc.mem_map(addressStart, len(data))
             uc.mem_write(addressStart, data)
         else:
-            print("- Skipping %s" % (segment.__dict__))
+            debugPrint("- Skipping %s" % (segment.__dict__))
 
     def relocateSection(sectionName):
             
@@ -1397,9 +1411,8 @@ def main():
     import uuid
 
     #import pyprovision
-    pyprovision = sys.modules[__name__] #globals()
+    pyprovision = sys.modules[__name__]
 
-    #print(pyprovision)
     from ctypes import c_ulonglong
     import secrets
     adi = pyprovision.ADI("./anisette/")
